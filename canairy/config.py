@@ -57,7 +57,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
         "fake_cli": {
             "enabled": True,
-            "tools": ["ollama", "claude", "codex", "aider"],
+            "tools": ["ollama", "claude", "codex", "gemini", "aider"],
+            "rename_real_tools": True,
             "install_path": "",  # empty = auto-detect
         },
         "canary_keys": {

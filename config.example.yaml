@@ -32,7 +32,8 @@ traps:
       - "deepseek-coder:6.7b"
   fake_cli:
     enabled: true
-    tools: ["ollama", "claude", "codex", "aider"]
+    tools: ["ollama", "claude", "codex", "gemini", "aider"]
+    rename_real_tools: true  # rename real binaries (claude→claudereal, etc.)
     install_path: ""  # empty = auto-detect
   canary_keys:
     enabled: true

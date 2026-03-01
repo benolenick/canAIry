@@ -333,7 +333,13 @@ async def _run_async(config: dict, alerter: Any) -> None:
     # -- Fake CLI tools (sync install) -------------------------------------
     if trap_cfg.get("fake_cli", {}).get("enabled"):
         try:
-            from canairy.traps.fake_cli import install_fake_clis
+            from canairy.traps.fake_cli import install_fake_clis, rename_real_tools
+
+            # Rename real tools first (claude→claudereal, etc.)
+            if trap_cfg["fake_cli"].get("rename_real_tools", True):
+                renamed = rename_real_tools(trap_cfg["fake_cli"])
+                for tool, (orig, dest) in renamed.items():
+                    logger.info("Renamed real %s: %s → %s", tool, orig, dest)
 
             install_fake_clis(trap_cfg["fake_cli"], config.get("alerts", {}))
             logger.info("Fake CLI tools installed.")
@@ -498,10 +504,15 @@ def cmd_uninstall(args: argparse.Namespace) -> None:  # noqa: ARG001
     # -- Fake CLI tools ---------------------------------------------------
     if trap_cfg.get("fake_cli", {}).get("enabled"):
         try:
-            from canairy.traps.fake_cli import uninstall_fake_clis  # type: ignore[import]
+            from canairy.traps.fake_cli import uninstall_fake_clis, restore_real_tools  # type: ignore[import]
 
             uninstall_fake_clis(trap_cfg["fake_cli"])
             print("  Fake CLI tools removed.")
+
+            # Restore renamed real tools (claudereal→claude, etc.)
+            restored = restore_real_tools(trap_cfg["fake_cli"])
+            if restored:
+                print(f"  Restored real tools: {', '.join(restored)}")
         except ImportError:
             print("  canairy.traps.fake_cli not available — skipping.")
         except Exception as exc:  # noqa: BLE001
