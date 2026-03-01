@@ -1,0 +1,23 @@
+[Unit]
+Description=canAIry — LLM honeypot daemon
+After=network.target
+Documentation=https://github.com/benolenick/canAIry
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/canairy run
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=canairy
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

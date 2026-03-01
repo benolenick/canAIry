@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "canairy"
+version = "0.1.0"
+description = "LLM honeypot — detect attackers probing for AI tools on compromised systems"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [{name = "Ben Olenick"}]
+keywords = ["honeypot", "security", "llm", "canary", "deception"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Security",
+    "Programming Language :: Python :: 3",
+]
+dependencies = [
+    "aiohttp>=3.9",
+    "watchdog>=4.0",
+    "pyyaml>=6.0",
+    "psutil>=5.9",
+]
+
+[project.scripts]
+canairy = "canairy.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["canairy*"]

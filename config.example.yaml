@@ -1,0 +1,43 @@
+# canAIry configuration
+# Copy to ~/.canairy/config.yaml and edit to your needs.
+# Or run: canairy install
+
+alerts:
+  webhook:
+    enabled: true
+    url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_HERE"
+  email:
+    enabled: false
+    smtp_host: "smtp.gmail.com"
+    smtp_port: 587
+    from_addr: "alerts@example.com"
+    to_addr: "admin@example.com"
+    password: "app-password"
+  syslog:
+    enabled: false
+    address: "/dev/log"
+    port: 514
+  logfile:
+    enabled: true
+    path: "~/.canairy/alerts.log"
+
+traps:
+  ollama_server:
+    enabled: true
+    port: 11434
+    models:
+      - "llama3:latest"
+      - "mistral:7b-instruct"
+      - "codellama:13b"
+      - "deepseek-coder:6.7b"
+  fake_cli:
+    enabled: true
+    tools: ["ollama", "claude", "codex", "aider"]
+    install_path: ""  # empty = auto-detect
+  canary_keys:
+    enabled: true
+    locations:
+      - "~/.env"
+  fake_configs:
+    enabled: true
+    configs: ["ollama", "claude", "copilot"]
