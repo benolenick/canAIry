@@ -137,6 +137,14 @@ def cmd_install(args: argparse.Namespace) -> None:  # noqa: ARG001
         )
         trap_cfg["fake_cli"]["install_path"] = install_path
 
+        print("\n  When enabled, real AI tools on your PATH (claude, codex, gemini,")
+        print("  ollama, aider) get renamed to claudereal, codexreal, etc.")
+        print("  The original command names become honeypot traps.")
+        trap_cfg["fake_cli"]["rename_real_tools"] = _yn(
+            "  Rename real tools? (e.g. claude -> claudereal)",
+            default=trap_cfg["fake_cli"].get("rename_real_tools", True),
+        )
+
     print("\n-- Canary Keys --")
     trap_cfg["canary_keys"]["enabled"] = _yn(
         "Plant canary API keys in common locations?",

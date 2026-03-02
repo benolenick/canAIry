@@ -981,10 +981,11 @@ def rename_real_tools(config: dict) -> dict[str, tuple[Path, Path]]:
             logger.debug("rename_real_tools: %s is already a canAIry fake — skipping.", original)
             continue
 
-        dest = original.parent / real_name
+        # Preserve original extension (e.g. .CMD, .EXE on Windows)
+        dest = original.parent / (real_name + original.suffix)
 
-        # Idempotent: already renamed
-        if dest.exists():
+        # Idempotent: already renamed (check with and without extension)
+        if dest.exists() or (original.parent / real_name).exists():
             logger.debug("rename_real_tools: %s already exists — skipping.", dest)
             continue
 
@@ -1018,15 +1019,18 @@ def restore_real_tools(config: dict) -> list[str]:
     restored: list[str] = []
 
     for tool, real_name in _REAL_TOOL_MAP.items():
-        # Look for the renamed binary anywhere on PATH
+        # Look for the renamed binary anywhere on PATH (with or without ext)
         found = shutil.which(real_name)
         if not found:
             # Also check same directory as our fake, if installed
             try:
                 install_dir = get_install_dir(config)
-                candidate = install_dir / real_name
-                if candidate.exists():
-                    found = str(candidate)
+                # Try with common extensions too (.cmd, .exe)
+                for ext in ("", ".cmd", ".exe", ".CMD", ".EXE"):
+                    candidate = install_dir / (real_name + ext)
+                    if candidate.exists():
+                        found = str(candidate)
+                        break
             except Exception:
                 pass
 
@@ -1035,7 +1039,8 @@ def restore_real_tools(config: dict) -> list[str]:
             continue
 
         real_path = Path(found)
-        original = real_path.parent / tool
+        # Restore to original name with same extension
+        original = real_path.parent / (tool + real_path.suffix)
 
         # If the plain name exists and is NOT our fake, leave it alone
         if original.exists() and not _is_our_fake(original):
