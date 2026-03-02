@@ -68,6 +68,15 @@ def _is_own_path(path: str) -> bool:
     return False
 
 
+def _normalize_path(path: str) -> str:
+    """Return an absolute, normalized path string for stable comparisons."""
+    try:
+        resolved = str(Path(path).expanduser().resolve())
+    except Exception:
+        resolved = os.path.abspath(os.path.expanduser(path))
+    return os.path.normcase(resolved)
+
+
 def _basic_forensics(src_path: str) -> dict[str, Any]:
     """Gather available forensic context without importing the forensics module."""
     ctx: dict[str, Any] = {
@@ -137,12 +146,23 @@ class CanairyEventHandler(FileSystemEventHandler):
         alerter: Any,
         trap_type: str,
         loop: asyncio.AbstractEventLoop,
+        target_paths: list[Path],
     ) -> None:
         super().__init__()
         self.alerter = alerter
         self.trap_type = trap_type
         self.loop = loop
         self._cooldown: dict[str, float] = {}
+        self._target_files: set[str] = set()
+        self._target_dirs: set[str] = set()
+
+        for target in target_paths:
+            expanded = target.expanduser()
+            normalized = _normalize_path(str(expanded))
+            if expanded.exists() and expanded.is_dir():
+                self._target_dirs.add(normalized)
+            else:
+                self._target_files.add(normalized)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -154,6 +174,18 @@ class CanairyEventHandler(FileSystemEventHandler):
 
     def _touch_cooldown(self, path: str) -> None:
         self._cooldown[path] = time.monotonic()
+
+    def _is_target_path(self, path: str) -> bool:
+        """Return True if *path* belongs to one of the configured trap targets."""
+        normalized = _normalize_path(path)
+        if normalized in self._target_files:
+            return True
+
+        for directory in self._target_dirs:
+            if normalized == directory or normalized.startswith(directory + os.sep):
+                return True
+
+        return False
 
     def _build_alert(self, event: FileSystemEvent) -> dict[str, Any]:
         src = event.src_path
@@ -212,6 +244,10 @@ class CanairyEventHandler(FileSystemEventHandler):
         if _is_own_path(src_path):
             return
 
+        # Only alert on configured trap files/directories.
+        if not self._is_target_path(src_path):
+            return
+
         # Skip hidden OS metadata files
         basename = os.path.basename(src_path)
         if basename.startswith(".") and basename in (
@@ -245,7 +281,7 @@ class CanairyEventHandler(FileSystemEventHandler):
 
 
 async def start_watcher(
-    paths: list[Path],
+    paths: list[Path | str],
     alerter: Any,
     trap_type: str = "canary_key",
 ) -> list[Observer]:
@@ -271,12 +307,18 @@ async def start_watcher(
         on each to shut down cleanly.
     """
     loop = asyncio.get_running_loop()
-    handler = CanairyEventHandler(alerter=alerter, trap_type=trap_type, loop=loop)
+    normalized_targets = [Path(p).expanduser() for p in paths]
+    handler = CanairyEventHandler(
+        alerter=alerter,
+        trap_type=trap_type,
+        loop=loop,
+        target_paths=normalized_targets,
+    )
 
     observers: list[Observer] = []
     watched: set[str] = set()
 
-    for path in paths:
+    for path in normalized_targets:
         path = Path(path).expanduser().resolve()
 
         # For a file, watch its parent directory and rely on the handler to
