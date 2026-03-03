@@ -260,17 +260,18 @@ class Alerter:
         )
 
     async def _send_syslog(self, alert: dict) -> None:
-        """Emit *alert* as a structured syslog message."""
+        """Emit *alert* as a structured syslog message.
+
+        Sends the full alert as JSON in the syslog body for SIEM parsing.
+        The message is prefixed with ``canAIry:`` so rules can match on it.
+        """
         cfg = self._cfg.get("syslog", {})
         address = cfg.get("address", "/dev/log")
         port = int(cfg.get("port", 514))
 
-        message = (
-            f"canAIry alert: trap={alert.get('trap_type')} "
-            f"name={alert.get('trap_name')} "
-            f"host={alert.get('hostname')} "
-            f"ts={alert.get('timestamp')}"
-        )
+        # Send full JSON for SIEM ingestion — prefix with program name for
+        # easy rule matching in Security Onion / Splunk / etc.
+        message = f"canAIry: {json.dumps(alert, ensure_ascii=False)}"
 
         # Determine address tuple vs socket path.
         # If address looks like a filesystem path, use it directly (Unix socket).
