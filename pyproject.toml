@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "canairy"
-version = "0.1.0"
+version = "0.2.0"
 description = "LLM honeypot — detect attackers probing for AI tools on compromised systems"
 readme = "README.md"
 license = {text = "MIT"}

@@ -1,10 +1,15 @@
 # canAIry configuration
-# Copy to ~/.canairy/config.yaml and edit to your needs.
-# Or run: canairy install
+# Copy to ~/.canairy/config.yaml and edit, or run: canairy setup
+#
+# Trap modes (set via `canairy setup`):
+#   [1] Server traps only  — fake Ollama API, no CLI changes
+#   [2] CLI traps only     — fake commands, real tools renamed
+#   [3] Full               — both server and CLI traps
+#   [4] Custom             — pick individual traps
 
 alerts:
   webhook:
-    enabled: true
+    enabled: false
     url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_HERE"
   email:
     enabled: false
@@ -15,13 +20,14 @@ alerts:
     password: "app-password"
   syslog:
     enabled: false
-    address: "/dev/log"
+    address: "192.168.1.100"   # Security Onion / Splunk / SIEM IP
     port: 514
   logfile:
     enabled: true
     path: "~/.canairy/alerts.log"
 
 traps:
+  # -- Server traps --
   ollama_server:
     enabled: true
     port: 11434
@@ -30,15 +36,19 @@ traps:
       - "mistral:7b-instruct"
       - "codellama:13b"
       - "deepseek-coder:6.7b"
+
+  # -- CLI traps --
   fake_cli:
-    enabled: true
+    enabled: false              # enable for CLI or Full mode
     tools: ["ollama", "claude", "codex", "gemini", "aider"]
-    rename_real_tools: true  # rename real binaries (claude→claudereal, etc.)
-    install_path: ""  # empty = auto-detect
+    rename_real_tools: true     # claude -> claudereal, etc.
+    install_path: ""            # empty = auto-detect
+
+  # -- Passive traps --
   canary_keys:
-    enabled: true
+    enabled: false
     locations:
       - "~/.env"
   fake_configs:
-    enabled: true
+    enabled: false
     configs: ["ollama", "claude", "copilot"]

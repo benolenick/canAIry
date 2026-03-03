@@ -1,12 +1,13 @@
 """canAIry CLI entry point.
 
-Subcommands
------------
-install      Interactive first-run setup — picks traps and alert channels.
-run          Load config and start all enabled traps (blocking).
-status       Show current config summary.
-test-alert   Fire a test alert to all configured channels.
-uninstall    Remove planted artefacts (traps, keys, fake configs).
+Commands
+-------
+(no command)   Interactive configuration menu
+setup          Quick mode selection wizard
+run            Load config and start all enabled traps (blocking)
+status         Show current config summary
+test-alert     Fire a test alert to all configured channels
+uninstall      Remove planted artefacts (traps, keys, fake configs)
 """
 
 from __future__ import annotations
@@ -29,6 +30,8 @@ logging.basicConfig(
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 logger = logging.getLogger("canairy")
+
+VERSION = "0.2.0"
 
 
 # ---------------------------------------------------------------------------
@@ -90,182 +93,304 @@ def _print_section(title: str) -> None:
     print(f"{'=' * 60}")
 
 
+def _detect_mode(config: dict) -> str:
+    """Determine current trap mode from config."""
+    traps = config.get("traps", {})
+    has_servers = traps.get("ollama_server", {}).get("enabled", False)
+    has_cli = traps.get("fake_cli", {}).get("enabled", False)
+
+    if has_servers and has_cli:
+        return "Full"
+    elif has_servers:
+        return "Server Traps"
+    elif has_cli:
+        return "CLI Traps"
+    else:
+        # Check if any passive traps are on
+        has_keys = traps.get("canary_keys", {}).get("enabled", False)
+        has_configs = traps.get("fake_configs", {}).get("enabled", False)
+        if has_keys or has_configs:
+            return "Passive Only"
+        return "Disabled"
+
+
+def _trap_summary(config: dict) -> str:
+    """Return a short string describing active traps."""
+    parts = []
+    traps = config.get("traps", {})
+    if traps.get("ollama_server", {}).get("enabled"):
+        port = traps["ollama_server"].get("port", 11434)
+        parts.append(f"Ollama :{port}")
+    if traps.get("fake_cli", {}).get("enabled"):
+        tools = traps["fake_cli"].get("tools", [])
+        parts.append(f"CLI ({', '.join(tools)})")
+    if traps.get("canary_keys", {}).get("enabled"):
+        parts.append("canary keys")
+    if traps.get("fake_configs", {}).get("enabled"):
+        parts.append("fake configs")
+    return ", ".join(parts) if parts else "none"
+
+
+def _alert_summary(config: dict) -> str:
+    """Return short string of active alert channels."""
+    parts = []
+    alerts = config.get("alerts", {})
+    if alerts.get("syslog", {}).get("enabled"):
+        addr = alerts["syslog"].get("address", "")
+        port = alerts["syslog"].get("port", 514)
+        parts.append(f"syslog({addr}:{port})")
+    if alerts.get("webhook", {}).get("enabled"):
+        parts.append("webhook")
+    if alerts.get("email", {}).get("enabled"):
+        parts.append("email")
+    if alerts.get("logfile", {}).get("enabled"):
+        parts.append("logfile")
+    return ", ".join(parts) if parts else "none"
+
+
 # ---------------------------------------------------------------------------
-# install
+# Interactive menu (default when no subcommand given)
 # ---------------------------------------------------------------------------
 
 
-def cmd_install(args: argparse.Namespace) -> None:  # noqa: ARG001
-    """Interactive first-run wizard."""
+def cmd_menu() -> None:
+    """Interactive configuration menu."""
     load_config, save_config, get_config_dir = _import_config()
 
-    _print_section("canAIry — Interactive Setup")
-    print("This wizard will configure your honeypot traps and alert channels.")
-    print("Press Enter to accept defaults.\n")
+    while True:
+        config = load_config()
+        mode = _detect_mode(config)
 
-    config = load_config()
+        _print_section(f"canAIry v{VERSION}")
+        print()
+        print(f"  Mode:    {mode}")
+        print(f"  Traps:   {_trap_summary(config)}")
+        print(f"  Alerts:  {_alert_summary(config)}")
+        print()
+        print("  [1] Setup      choose trap mode and configure alerts")
+        print("  [2] Status     detailed configuration view")
+        print("  [3] Run        start the honeypot")
+        print("  [4] Test       send a test alert")
+        print("  [5] Uninstall  remove all traps")
+        print("  [q] Quit")
+        print()
 
-    # ------------------------------------------------------------------ traps
-    _print_section("Trap Configuration")
+        try:
+            choice = input("  > ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
 
-    trap_cfg = config["traps"]
+        if choice == "1":
+            _setup_interactive(config, save_config)
+        elif choice == "2":
+            cmd_status(argparse.Namespace())
+        elif choice == "3":
+            cmd_run(argparse.Namespace(daemon=False))
+            break  # run blocks until Ctrl-C
+        elif choice == "4":
+            cmd_test_alert(argparse.Namespace())
+        elif choice == "5":
+            cmd_uninstall(argparse.Namespace())
+        elif choice in ("q", "quit", "exit"):
+            break
+        else:
+            print("  Invalid choice.\n")
 
-    print("\n-- Ollama Server --")
-    trap_cfg["ollama_server"]["enabled"] = _yn(
-        "Enable fake Ollama API server?",
-        default=trap_cfg["ollama_server"]["enabled"],
+
+# ---------------------------------------------------------------------------
+# setup (replaces old install)
+# ---------------------------------------------------------------------------
+
+
+def _setup_interactive(config: dict | None = None, save_fn=None) -> None:
+    """Quick mode selection + alert configuration."""
+    if config is None or save_fn is None:
+        load_config, save_fn, _ = _import_config()
+        config = load_config()
+
+    _print_section("Trap Mode")
+    print()
+    print("  [1] Server traps only")
+    print("      Fake Ollama API on port 11434 — no CLI changes")
+    print()
+    print("  [2] CLI traps only")
+    print("      Fake claude, codex, gemini, ollama, aider commands")
+    print("      Real tools renamed (claude -> claudereal, etc.)")
+    print()
+    print("  [3] Full deployment")
+    print("      Both server and CLI traps + canary keys + fake configs")
+    print()
+    print("  [4] Custom")
+    print("      Pick individual traps")
+    print()
+
+    try:
+        choice = input("  Mode [1-4]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\n  Cancelled.")
+        return
+
+    traps = config["traps"]
+
+    if choice == "1":
+        traps["ollama_server"]["enabled"] = True
+        traps["fake_cli"]["enabled"] = False
+        traps["canary_keys"]["enabled"] = False
+        traps["fake_configs"]["enabled"] = False
+        print("\n  -> Server traps mode.")
+
+    elif choice == "2":
+        traps["ollama_server"]["enabled"] = False
+        traps["fake_cli"]["enabled"] = True
+        traps["fake_cli"]["rename_real_tools"] = True
+        traps["canary_keys"]["enabled"] = False
+        traps["fake_configs"]["enabled"] = False
+        print("\n  -> CLI traps mode.")
+
+    elif choice == "3":
+        traps["ollama_server"]["enabled"] = True
+        traps["fake_cli"]["enabled"] = True
+        traps["fake_cli"]["rename_real_tools"] = True
+        traps["canary_keys"]["enabled"] = True
+        traps["fake_configs"]["enabled"] = True
+        print("\n  -> Full deployment mode.")
+
+    elif choice == "4":
+        _setup_custom(traps)
+
+    else:
+        print("  Invalid choice, keeping current config.")
+        return
+
+    # Alert channel configuration
+    print()
+    if _yn("  Configure alert channels?", default=True):
+        _setup_alerts(config)
+
+    save_fn(config)
+    print(f"\n  Config saved. Run 'canairy run' or choose [3] from menu to start.\n")
+
+
+def _setup_custom(traps: dict) -> None:
+    """Let user toggle individual traps."""
+    print()
+
+    # Ollama server
+    traps["ollama_server"]["enabled"] = _yn(
+        "  Fake Ollama server?",
+        default=traps["ollama_server"]["enabled"],
     )
-    if trap_cfg["ollama_server"]["enabled"]:
+    if traps["ollama_server"]["enabled"]:
         port_raw = _prompt(
-            "  Listen port",
-            default=str(trap_cfg["ollama_server"]["port"]),
+            "    Port", str(traps["ollama_server"].get("port", 11434))
         )
         try:
-            trap_cfg["ollama_server"]["port"] = int(port_raw)
-        except ValueError:
-            print("  Invalid port, keeping default.")
-
-    print("\n-- Fake CLI Tools --")
-    trap_cfg["fake_cli"]["enabled"] = _yn(
-        "Install fake CLI wrappers (ollama, claude, codex, aider)?",
-        default=trap_cfg["fake_cli"]["enabled"],
-    )
-    if trap_cfg["fake_cli"]["enabled"]:
-        install_path = _prompt(
-            "  Install directory (empty = auto-detect PATH)",
-            default=trap_cfg["fake_cli"]["install_path"],
-        )
-        trap_cfg["fake_cli"]["install_path"] = install_path
-
-        print("\n  When enabled, real AI tools on your PATH (claude, codex, gemini,")
-        print("  ollama, aider) get renamed to claudereal, codexreal, etc.")
-        print("  The original command names become honeypot traps.")
-        trap_cfg["fake_cli"]["rename_real_tools"] = _yn(
-            "  Rename real tools? (e.g. claude -> claudereal)",
-            default=trap_cfg["fake_cli"].get("rename_real_tools", True),
-        )
-
-    print("\n-- Canary Keys --")
-    trap_cfg["canary_keys"]["enabled"] = _yn(
-        "Plant canary API keys in common locations?",
-        default=trap_cfg["canary_keys"]["enabled"],
-    )
-    if trap_cfg["canary_keys"]["enabled"]:
-        locs = trap_cfg["canary_keys"]["locations"]
-        print(f"  Current locations: {locs}")
-        add_more = _yn("  Add another location?", default=False)
-        while add_more:
-            loc = _prompt("    Path (e.g. ~/.config/myapp/.env)").strip()
-            if loc:
-                locs.append(loc)
-            add_more = _yn("  Add another?", default=False)
-
-    print("\n-- Fake Configs --")
-    trap_cfg["fake_configs"]["enabled"] = _yn(
-        "Plant fake AI tool config files?",
-        default=trap_cfg["fake_configs"]["enabled"],
-    )
-
-    # -------------------------------------------------------------- alerts
-    _print_section("Alert Channel Configuration")
-
-    alert_cfg = config["alerts"]
-
-    # Webhook
-    print("\n-- Webhook (Discord / Slack / generic) --")
-    alert_cfg["webhook"]["enabled"] = _yn(
-        "Enable webhook alerts?",
-        default=alert_cfg["webhook"]["enabled"],
-    )
-    if alert_cfg["webhook"]["enabled"]:
-        alert_cfg["webhook"]["url"] = _prompt(
-            "  Webhook URL",
-            default=alert_cfg["webhook"]["url"],
-        )
-
-    # Email
-    print("\n-- Email (SMTP) --")
-    alert_cfg["email"]["enabled"] = _yn(
-        "Enable email alerts?",
-        default=alert_cfg["email"]["enabled"],
-    )
-    if alert_cfg["email"]["enabled"]:
-        alert_cfg["email"]["smtp_host"] = _prompt(
-            "  SMTP host",
-            default=alert_cfg["email"]["smtp_host"],
-        )
-        port_raw = _prompt(
-            "  SMTP port",
-            default=str(alert_cfg["email"]["smtp_port"]),
-        )
-        try:
-            alert_cfg["email"]["smtp_port"] = int(port_raw)
-        except ValueError:
-            print("  Invalid port, keeping default.")
-        alert_cfg["email"]["from_addr"] = _prompt(
-            "  From address",
-            default=alert_cfg["email"]["from_addr"],
-        )
-        alert_cfg["email"]["to_addr"] = _prompt(
-            "  To address",
-            default=alert_cfg["email"]["to_addr"],
-        )
-        alert_cfg["email"]["password"] = _prompt(
-            "  SMTP password",
-            default=alert_cfg["email"]["password"],
-            secret=True,
-        )
-
-    # Syslog
-    print("\n-- Syslog --")
-    alert_cfg["syslog"]["enabled"] = _yn(
-        "Enable syslog alerts?",
-        default=alert_cfg["syslog"]["enabled"],
-    )
-    if alert_cfg["syslog"]["enabled"]:
-        alert_cfg["syslog"]["address"] = _prompt(
-            "  Syslog address (socket path or hostname)",
-            default=alert_cfg["syslog"]["address"],
-        )
-        port_raw = _prompt(
-            "  Syslog port (ignored for socket paths)",
-            default=str(alert_cfg["syslog"]["port"]),
-        )
-        try:
-            alert_cfg["syslog"]["port"] = int(port_raw)
+            traps["ollama_server"]["port"] = int(port_raw)
         except ValueError:
             pass
 
-    # Logfile (always shown; defaulted to enabled)
-    print("\n-- Log File --")
-    alert_cfg["logfile"]["enabled"] = _yn(
-        "Enable JSON logfile alerts?",
-        default=alert_cfg["logfile"]["enabled"],
+    # Fake CLI
+    traps["fake_cli"]["enabled"] = _yn(
+        "  Fake CLI tools (claude, codex, gemini, ollama, aider)?",
+        default=traps["fake_cli"]["enabled"],
     )
-    if alert_cfg["logfile"]["enabled"]:
-        alert_cfg["logfile"]["path"] = _prompt(
-            "  Log file path",
-            default=alert_cfg["logfile"]["path"],
+    if traps["fake_cli"]["enabled"]:
+        traps["fake_cli"]["rename_real_tools"] = _yn(
+            "    Rename real tools? (claude -> claudereal, etc.)",
+            default=traps["fake_cli"].get("rename_real_tools", True),
+        )
+        install_path = _prompt(
+            "    Install directory (empty = auto-detect)",
+            default=traps["fake_cli"].get("install_path", ""),
+        )
+        traps["fake_cli"]["install_path"] = install_path
+
+    # Canary keys
+    traps["canary_keys"]["enabled"] = _yn(
+        "  Plant canary API keys?",
+        default=traps["canary_keys"]["enabled"],
+    )
+
+    # Fake configs
+    traps["fake_configs"]["enabled"] = _yn(
+        "  Plant fake config directories?",
+        default=traps["fake_configs"]["enabled"],
+    )
+
+
+def _setup_alerts(config: dict) -> None:
+    """Configure alert channels."""
+    alerts = config["alerts"]
+
+    # Syslog
+    print("\n  -- Syslog (SIEM: Security Onion, Splunk, etc.) --")
+    alerts["syslog"]["enabled"] = _yn(
+        "  Enable syslog?", alerts["syslog"]["enabled"]
+    )
+    if alerts["syslog"]["enabled"]:
+        alerts["syslog"]["address"] = _prompt(
+            "    Address (IP or socket path)",
+            alerts["syslog"].get("address", "/dev/log"),
+        )
+        port_raw = _prompt(
+            "    Port", str(alerts["syslog"].get("port", 514))
+        )
+        try:
+            alerts["syslog"]["port"] = int(port_raw)
+        except ValueError:
+            pass
+
+    # Webhook
+    print("\n  -- Webhook (Discord / Slack / generic) --")
+    alerts["webhook"]["enabled"] = _yn(
+        "  Enable webhook?", alerts["webhook"]["enabled"]
+    )
+    if alerts["webhook"]["enabled"]:
+        alerts["webhook"]["url"] = _prompt(
+            "    Webhook URL", alerts["webhook"].get("url", "")
         )
 
-    # ------------------------------------------------------------------ save
-    save_config(config)
-    cfg_path = get_config_dir() / "config.yaml"
-
-    _print_section("Setup Complete")
-    print(f"\nConfig saved to: {cfg_path}")
-    print("\nEnabled traps:")
-    for trap_name, trap_val in config["traps"].items():
-        status = "on" if trap_val.get("enabled") else "off"
-        print(f"  {trap_name:25s} {status}")
-    print("\nEnabled alert channels:")
-    for ch_name, ch_val in config["alerts"].items():
-        status = "on" if ch_val.get("enabled") else "off"
-        print(f"  {ch_name:25s} {status}")
-    print(
-        "\nRun `canairy run` to start the honeypot.\n"
-        "Run `canairy test-alert` to verify your alert channels.\n"
+    # Email
+    print("\n  -- Email (SMTP) --")
+    alerts["email"]["enabled"] = _yn(
+        "  Enable email?", alerts["email"]["enabled"]
     )
+    if alerts["email"]["enabled"]:
+        alerts["email"]["smtp_host"] = _prompt(
+            "    SMTP host", alerts["email"].get("smtp_host", "")
+        )
+        port_raw = _prompt(
+            "    SMTP port", str(alerts["email"].get("smtp_port", 587))
+        )
+        try:
+            alerts["email"]["smtp_port"] = int(port_raw)
+        except ValueError:
+            pass
+        alerts["email"]["from_addr"] = _prompt(
+            "    From address", alerts["email"].get("from_addr", "")
+        )
+        alerts["email"]["to_addr"] = _prompt(
+            "    To address", alerts["email"].get("to_addr", "")
+        )
+        alerts["email"]["password"] = _prompt(
+            "    SMTP password", alerts["email"].get("password", ""), secret=True
+        )
+
+    # Logfile
+    print("\n  -- Log file --")
+    alerts["logfile"]["enabled"] = _yn(
+        "  Enable JSON logfile?", alerts["logfile"]["enabled"]
+    )
+    if alerts["logfile"]["enabled"]:
+        alerts["logfile"]["path"] = _prompt(
+            "    Path", alerts["logfile"].get("path", "~/.canairy/alerts.log")
+        )
+
+
+def cmd_setup(args: argparse.Namespace) -> None:  # noqa: ARG001
+    """Quick setup wizard (subcommand entry point)."""
+    _setup_interactive()
 
 
 # ---------------------------------------------------------------------------
@@ -343,11 +468,11 @@ async def _run_async(config: dict, alerter: Any) -> None:
         try:
             from canairy.traps.fake_cli import install_fake_clis, rename_real_tools
 
-            # Rename real tools first (claude→claudereal, etc.)
+            # Rename real tools first (claude->claudereal, etc.)
             if trap_cfg["fake_cli"].get("rename_real_tools", True):
                 renamed = rename_real_tools(trap_cfg["fake_cli"])
                 for tool, (orig, dest) in renamed.items():
-                    logger.info("Renamed real %s: %s → %s", tool, orig, dest)
+                    logger.info("Renamed real %s: %s -> %s", tool, orig, dest)
 
             install_fake_clis(trap_cfg["fake_cli"], config.get("alerts", {}))
             logger.info("Fake CLI tools installed.")
@@ -382,11 +507,12 @@ async def _run_async(config: dict, alerter: Any) -> None:
 
     if not started_any:
         logger.warning(
-            "No traps are running. Enable at least one trap in your config."
+            "No traps are running. Run 'canairy setup' to enable traps."
         )
         return
 
-    print("canAIry is running. Press Ctrl-C to stop.")
+    mode = _detect_mode({"traps": trap_cfg})
+    print(f"canAIry is running ({mode}). Press Ctrl-C to stop.")
 
     # Block forever until interrupted.
     stop_event = asyncio.Event()
@@ -418,10 +544,10 @@ def cmd_status(args: argparse.Namespace) -> None:  # noqa: ARG001
 
     _print_section("canAIry Status")
 
-    print(f"\nConfig file : {cfg_path}")
-    print(f"Config exists: {cfg_path.exists()}")
+    print(f"\n  Config:  {cfg_path}")
+    print(f"  Mode:    {_detect_mode(config)}")
 
-    print("\nTraps:")
+    print("\n  Traps:")
     for name, val in config.get("traps", {}).items():
         enabled = val.get("enabled", False)
         marker = "[ON] " if enabled else "[off]"
@@ -430,13 +556,15 @@ def cmd_status(args: argparse.Namespace) -> None:  # noqa: ARG001
             extra = f"  port={val.get('port', 11434)}"
         elif name == "fake_cli" and enabled:
             extra = f"  tools={val.get('tools', [])}"
+            if val.get("rename_real_tools"):
+                extra += "  (renames real tools)"
         elif name == "canary_keys" and enabled:
             extra = f"  locations={val.get('locations', [])}"
         elif name == "fake_configs" and enabled:
             extra = f"  configs={val.get('configs', [])}"
-        print(f"  {marker} {name}{extra}")
+        print(f"    {marker} {name}{extra}")
 
-    print("\nAlert Channels:")
+    print("\n  Alert Channels:")
     for name, val in config.get("alerts", {}).items():
         enabled = val.get("enabled", False)
         marker = "[ON] " if enabled else "[off]"
@@ -448,10 +576,10 @@ def cmd_status(args: argparse.Namespace) -> None:  # noqa: ARG001
         elif name == "email" and enabled:
             extra = f"  to={val.get('to_addr', '')}"
         elif name == "syslog" and enabled:
-            extra = f"  address={val.get('address', '')}"
+            extra = f"  {val.get('address', '')}:{val.get('port', 514)}"
         elif name == "logfile" and enabled:
-            extra = f"  path={val.get('path', '')}"
-        print(f"  {marker} {name}{extra}")
+            extra = f"  {val.get('path', '')}"
+        print(f"    {marker} {name}{extra}")
 
     print()
 
@@ -469,17 +597,17 @@ def cmd_test_alert(args: argparse.Namespace) -> None:  # noqa: ARG001
     config = load_config()
     alerter = Alerter(config)
 
-    print("Sending test alert to all enabled channels...")
+    print("  Sending test alert to all enabled channels...")
 
     async def _run() -> dict:
         return await alerter.test()
 
     results = asyncio.run(_run())
 
-    print("\nResults:")
+    print("\n  Results:")
     for channel, outcome in results.items():
         status = "OK" if outcome == "ok" else f"FAILED: {outcome}"
-        print(f"  {channel:20s} {status}")
+        print(f"    {channel:20s} {status}")
     print()
 
 
@@ -493,16 +621,18 @@ def cmd_uninstall(args: argparse.Namespace) -> None:  # noqa: ARG001
     load_config, _, get_config_dir = _import_config()
 
     _print_section("canAIry Uninstall")
-    print("This will remove:\n"
-          "  - Fake CLI wrapper scripts\n"
-          "  - Canary key files\n"
-          "  - Fake config directories\n")
-    print("This will NOT remove:\n"
-          "  - ~/.canairy/config.yaml\n"
-          "  - ~/.canairy/alerts.log\n")
+    print("  This will remove:")
+    print("    - Fake CLI wrapper scripts")
+    print("    - Canary key files")
+    print("    - Fake config directories")
+    print()
+    print("  This will NOT remove:")
+    print("    - ~/.canairy/config.yaml")
+    print("    - ~/.canairy/alerts.log")
+    print()
 
-    if not _yn("Continue with uninstall?", default=False):
-        print("Uninstall cancelled.")
+    if not _yn("  Continue with uninstall?", default=False):
+        print("  Uninstall cancelled.")
         return
 
     config = load_config()
@@ -512,57 +642,56 @@ def cmd_uninstall(args: argparse.Namespace) -> None:  # noqa: ARG001
     # -- Fake CLI tools ---------------------------------------------------
     if trap_cfg.get("fake_cli", {}).get("enabled"):
         try:
-            from canairy.traps.fake_cli import uninstall_fake_clis, restore_real_tools  # type: ignore[import]
+            from canairy.traps.fake_cli import uninstall_fake_clis, restore_real_tools
 
             uninstall_fake_clis(trap_cfg["fake_cli"])
-            print("  Fake CLI tools removed.")
+            print("    Fake CLI tools removed.")
 
-            # Restore renamed real tools (claudereal→claude, etc.)
+            # Restore renamed real tools (claudereal->claude, etc.)
             restored = restore_real_tools(trap_cfg["fake_cli"])
             if restored:
-                print(f"  Restored real tools: {', '.join(restored)}")
+                print(f"    Restored real tools: {', '.join(restored)}")
         except ImportError:
-            print("  canairy.traps.fake_cli not available — skipping.")
+            print("    canairy.traps.fake_cli not available — skipping.")
         except Exception as exc:  # noqa: BLE001
-            msg = f"  Failed to remove fake CLI tools: {exc}"
+            msg = f"    Failed to remove fake CLI tools: {exc}"
             print(msg)
             errors.append(msg)
 
     # -- Canary keys ------------------------------------------------------
     if trap_cfg.get("canary_keys", {}).get("enabled"):
         try:
-            from canairy.traps.canary_keys import uninstall_canary_keys  # type: ignore[import]
+            from canairy.traps.canary_keys import uninstall_canary_keys
 
             uninstall_canary_keys(trap_cfg["canary_keys"])
-            print("  Canary key files removed.")
+            print("    Canary key files removed.")
         except ImportError:
-            # Fallback: delete the files listed in config ourselves.
             _remove_canary_key_files(trap_cfg.get("canary_keys", {}), errors)
         except Exception as exc:  # noqa: BLE001
-            msg = f"  Failed to remove canary keys: {exc}"
+            msg = f"    Failed to remove canary keys: {exc}"
             print(msg)
             errors.append(msg)
 
     # -- Fake configs -----------------------------------------------------
     if trap_cfg.get("fake_configs", {}).get("enabled"):
         try:
-            from canairy.traps.fake_configs import uninstall_fake_configs  # type: ignore[import]
+            from canairy.traps.fake_configs import uninstall_fake_configs
 
             uninstall_fake_configs(trap_cfg["fake_configs"])
-            print("  Fake config files removed.")
+            print("    Fake config files removed.")
         except ImportError:
-            print("  canairy.traps.fake_configs not available — skipping.")
+            print("    canairy.traps.fake_configs not available — skipping.")
         except Exception as exc:  # noqa: BLE001
-            msg = f"  Failed to remove fake configs: {exc}"
+            msg = f"    Failed to remove fake configs: {exc}"
             print(msg)
             errors.append(msg)
 
     if errors:
-        print("\nUninstall completed with errors (see above).")
+        print("\n  Uninstall completed with errors (see above).")
         sys.exit(1)
     else:
-        print("\nUninstall complete.")
-        print("Config and alert log are preserved in:", get_config_dir())
+        print("\n  Uninstall complete.")
+        print("  Config and alert log preserved in:", get_config_dir())
 
 
 def _remove_canary_key_files(canary_cfg: dict, errors: list[str]) -> None:
@@ -572,9 +701,9 @@ def _remove_canary_key_files(canary_cfg: dict, errors: list[str]) -> None:
         if path.exists():
             try:
                 path.unlink()
-                print(f"  Removed: {path}")
+                print(f"    Removed: {path}")
             except OSError as exc:
-                msg = f"  Could not remove {path}: {exc}"
+                msg = f"    Could not remove {path}: {exc}"
                 print(msg)
                 errors.append(msg)
 
@@ -587,20 +716,28 @@ def _remove_canary_key_files(canary_cfg: dict, errors: list[str]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="canairy",
-        description="canAIry — LLM honeypot for detecting attackers probing AI infrastructure.",
+        description=(
+            "canAIry — LLM honeypot for detecting attackers probing AI infrastructure.\n"
+            "Run with no arguments for an interactive menu."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s 0.1.0",
+        version=f"%(prog)s {VERSION}",
     )
 
     sub = parser.add_subparsers(dest="command", metavar="<command>")
-    sub.required = True
+    # NOT required — no subcommand means interactive menu.
 
-    # install
-    p_install = sub.add_parser("install", help="Interactive setup wizard.")
-    p_install.set_defaults(func=cmd_install)
+    # setup (with install as alias)
+    p_setup = sub.add_parser(
+        "setup",
+        help="Quick trap mode selection wizard.",
+        aliases=["install"],
+    )
+    p_setup.set_defaults(func=cmd_setup)
 
     # run
     p_run = sub.add_parser("run", help="Start all enabled traps.")
@@ -627,7 +764,11 @@ def main() -> None:
     p_uninstall.set_defaults(func=cmd_uninstall)
 
     args = parser.parse_args()
-    args.func(args)
+
+    if args.command is None:
+        cmd_menu()
+    else:
+        args.func(args)
 
 
 if __name__ == "__main__":

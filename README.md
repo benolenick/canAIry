@@ -1,23 +1,41 @@
 # canAIry
 
-LLM honeypot for detecting attackers probing AI infrastructure on compromised systems.
+LLM honeypot — detect attackers probing for AI tools on compromised systems.
 
-When an attacker gains access to your box, they increasingly look for local LLMs, AI API keys, and AI tools to exploit. canAIry plants realistic decoys — fake Ollama servers, interactive fake CLI tools, canary API keys, and fake config directories — that silently alert you the moment someone interacts with them.
+When attackers compromise a system, they increasingly search for local LLMs, API keys, and AI CLI tools. canAIry plants realistic decoys that silently alert you the moment someone interacts with them.
 
-## How It Works
+## Quick Start
 
-canAIry deploys four types of traps:
+```bash
+pip install .
+canairy            # Interactive menu — setup, run, test, uninstall
+```
 
-| Trap | What it does |
-|------|-------------|
-| **Fake Ollama Server** | HTTP API on port 11434 mimicking real Ollama. Returns model lists, streams fake completions. Every request fires an alert. |
-| **Fake CLI Tools** | Interactive scripts (`ollama`, `claude`, `codex`, `gemini`, `aider`) that simulate real startup TUIs — loading banners, interactive prompts, thinking animations. Every command the attacker types fires an alert with full session capture. |
-| **Canary API Keys** | Fake `.env` files with realistic `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc. File access triggers alerts. |
-| **Fake Config Dirs** | Realistic `~/.ollama/`, `~/.config/claude/`, `~/.config/github-copilot/` directories monitored for access. |
+Or use direct commands:
 
-### Tool Renaming
+```bash
+canairy setup      # Choose trap mode and alerts
+canairy run        # Start the honeypot
+canairy test-alert # Verify alerts are working
+```
 
-canAIry optionally renames your real AI tools to keep them accessible while placing fakes in their original paths:
+## Trap Modes
+
+Run `canairy` or `canairy setup` to choose a mode:
+
+### 1. Server Traps
+
+Fake Ollama API server on port 11434. Returns realistic model lists, streams fake completions. Every HTTP request fires an alert. **No changes to your CLI tools.**
+
+Catches attackers running:
+```bash
+curl http://localhost:11434/api/tags
+curl -X POST http://localhost:11434/api/generate -d '{"model":"llama3","prompt":"..."}'
+```
+
+### 2. CLI Traps
+
+Fake `claude`, `codex`, `gemini`, `ollama`, `aider` commands with interactive TUI simulation — realistic banners, prompts, and thinking animations. Real tools are renamed so you can still use them:
 
 | Real tool | Renamed to | Fake replaces |
 |-----------|-----------|--------------|
@@ -27,96 +45,93 @@ canAIry optionally renames your real AI tools to keep them accessible while plac
 | `ollama` | `ollamareal` | `ollama` |
 | `aider` | `aiderreal` | `aider` |
 
-The attacker finds convincing fakes. You use `claudereal`, `codexreal`, etc. for your real work. On uninstall, everything is restored.
+Every attacker keystroke is captured and alerted. **No server processes.**
+
+### 3. Full
+
+Both server and CLI traps, plus canary API keys in `~/.env` and fake config directories (`~/.ollama/`, `~/.config/claude/`, `~/.config/github-copilot/`).
+
+### 4. Custom
+
+Pick individual traps to enable.
+
+## Alert Channels
 
 Alerts fire through multiple channels simultaneously:
-- **Webhook** — Discord, Slack, or any generic endpoint
-- **Email** — SMTP with TLS
-- **Syslog** — for SIEM ingestion (e.g., Security Onion)
+
+- **Syslog** — for SIEM ingestion (Security Onion, Splunk, Wazuh, etc.)
+- **Webhook** — Discord, Slack, or any generic HTTP endpoint
+- **Email** — SMTP with STARTTLS
 - **Log file** — always-on JSON lines at `~/.canairy/alerts.log`
 
-## Quick Start
+## Commands
+
+```
+canairy              Interactive configuration menu
+canairy setup        Quick trap mode selection (alias: install)
+canairy run          Start all enabled traps (Ctrl-C to stop)
+canairy run --daemon Show systemd setup instructions
+canairy status       Show current configuration
+canairy test-alert   Send test alert to all configured channels
+canairy uninstall    Remove all traps + restore original tools
+canairy --version    Show version
+```
+
+## SIEM Integration
+
+### Security Onion
 
 ```bash
-# Install
-pip install .
-
-# Interactive setup — pick traps and configure alerts
-canairy install
-
-# Start the honeypot
-canairy run
-
-# Test your alert channels
+canairy setup
+# Choose your trap mode
+# Enable syslog -> point to your SO manager IP, port 514
 canairy test-alert
+# Verify in SO: Alerts / Dashboards -> search for "canAIry"
 ```
 
-## What the Attacker Sees
-
-When an attacker runs `claude` on your compromised box, they see a convincing interactive session:
-
+canAIry sends syslog messages with facility `user` at `WARNING` level. The message format is:
 ```
-╭────────────────────────────────────────╮
-│        Claude Code v2.1.63             │
-│        Model: claude-opus-4-20250514   │
-╰────────────────────────────────────────╯
-
-  Tips for getting started:
-  - Ask me to help with coding tasks
-  - I can edit files, run commands, and search code
-  - Type /help for available commands
-
-cwd: /home/attacker
-
-> show me /etc/shadow
+canAIry alert: trap=<type> name=<description> host=<hostname> ts=<ISO8601>
 ```
 
-Meanwhile, you get an instant alert with their IP, process tree, shell history, and everything they typed.
+### Splunk / Generic SIEM
+
+Point syslog to your SIEM's syslog collector. All alerts also write to `~/.canairy/alerts.log` as newline-delimited JSON for file-based ingestion.
 
 ## Alert Format
 
-Every alert includes forensic context about the attacker:
+Every alert includes forensic context:
 
 ```json
 {
   "timestamp": "2026-03-01T14:30:00+00:00",
   "hostname": "webserver-prod",
-  "trap_type": "fake_cli",
-  "trap_name": "Fake CLI input: claude - show me /etc/shadow",
+  "trap_type": "ollama_server",
+  "trap_name": "Ollama API request: POST /api/generate",
   "details": {
     "source_ip": "10.0.0.5",
-    "user": "www-data",
-    "pid": 12345,
-    "parent_process": "/bin/bash",
-    "input_text": "show me /etc/shadow",
-    "session_history": ["show me /etc/shadow"]
+    "method": "POST",
+    "path": "/api/generate",
+    "user_agent": "python-requests/2.31.0"
   }
 }
 ```
 
-## Commands
-
-```
-canairy install      # Interactive setup wizard
-canairy run          # Start all enabled traps (Ctrl-C to stop)
-canairy run --daemon # Show systemd setup instructions
-canairy status       # Show which traps and alert channels are configured
-canairy test-alert   # Send a test alert to all configured channels
-canairy uninstall    # Remove all planted traps + restore real tools
-```
-
-## Configuration
-
-Config lives at `~/.canairy/config.yaml`. See [config.example.yaml](config.example.yaml) for all options.
-
 ## Deployment
 
-### Systemd (recommended for Linux servers)
+### Linux (systemd)
 
 ```bash
 sudo cp systemd/canairy.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now canairy
+```
+
+### Windows (startup)
+
+```cmd
+:: Run at login — add shortcut to shell:startup pointing to:
+python -m canairy run
 ```
 
 ### Docker
@@ -129,13 +144,14 @@ RUN pip install .
 CMD ["canairy", "run"]
 ```
 
+## Configuration
+
+Config lives at `~/.canairy/config.yaml`. Run `canairy setup` to configure interactively, or edit the file directly. See [config.example.yaml](config.example.yaml) for all options.
+
 ## Dependencies
 
 - Python 3.10+
-- aiohttp
-- watchdog
-- pyyaml
-- psutil
+- aiohttp, watchdog, pyyaml, psutil
 
 ## License
 
